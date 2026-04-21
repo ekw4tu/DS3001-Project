@@ -34,6 +34,7 @@ TRAIN_PKL = ARTIFACTS_DIR / "train_embeddings.pkl"
 TEST_PKL = ARTIFACTS_DIR / "test_embeddings.pkl"
 GALLERY_PKL = ARTIFACTS_DIR / "gallery_embeddings.pkl"
 VGG_HEAD_PTH = ARTIFACTS_DIR / "vgg19_finetuned_head.pth"
+VGG_CONTRAST_PTH = ARTIFACTS_DIR / "vgg19_contrastive_head.pth"
 
 IMG_EXTENSIONS = (".png", ".jpg", ".jpeg")
 K_IDENTITIES = 10

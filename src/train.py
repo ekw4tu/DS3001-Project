@@ -5,6 +5,7 @@ Four functions, one per classifier in the Stage 3 comparison table:
   train_identity_classifier  - logistic regression on base_identity labels
   train_vgg_pca_pipeline     - L2 normalize -> PCA(256) -> logistic regression
   train_vgg_mlp_head         - small MLP head trained on frozen VGG features
+  train_vgg_contrastive_head - SupCon projection head + nearest-centroid id
 
 All use random_state=42 (config.RANDOM_SEED) for reproducibility.
 """
@@ -205,6 +206,123 @@ def train_vgg_mlp_head(train_df, test_df, epochs: int = 60, hidden_dim: int = 51
     return TrainResult(
         model=(model, le, best_state),
         accuracy=best_acc,
+        y_pred=y_pred,
+        y_true=y_true,
+        classes=le.classes_,
+        report=classification_report(y_true, y_pred, zero_division=0),
+    )
+
+
+def train_vgg_contrastive_head(train_df, test_df, epochs: int = 80,
+                                proj_dim: int = 128, hidden_dim: int = 512,
+                                temperature: float = 0.1):
+    """Supervised-contrastive projection head on frozen VGG19 features.
+
+    Pipeline (Stage 3 "finetune VGG for clustering/distance-based id"):
+        VGG19 (frozen, 4096-d) -> L2 -> Linear(4096, hidden_dim) -> BN -> ReLU
+                                      -> Linear(hidden_dim, proj_dim) -> L2
+        SupCon loss (Khosla et al. 2020) pulls same-identity embeddings
+        together and pushes different-identity embeddings apart on the unit
+        sphere.
+
+    Inference is nearest-centroid on the projected unit sphere: the test
+    label is the identity whose train-embedding centroid has the highest
+    cosine similarity to the projected test vector. This mirrors the
+    ArcFace identify() path but over a learned VGG-specific metric space,
+    which is the point the Stage 3 PDF asks us to demonstrate.
+    """
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, Dataset
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    X_train, y_train_raw, _ = _split_Xy(train_df, "VGG19", "base_identity")
+    X_test, y_test_raw, _ = _split_Xy(test_df, "VGG19", "base_identity")
+    X_train = normalize(X_train.astype(np.float32), norm="l2")
+    X_test = normalize(X_test.astype(np.float32), norm="l2")
+
+    le = LabelEncoder()
+    y_train = le.fit_transform(y_train_raw)
+    y_test = le.transform(y_test_raw)
+
+    class ProjHead(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(4096, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, proj_dim),
+            )
+
+        def forward(self, x):
+            return F.normalize(self.net(x), dim=1)
+
+    class DS(Dataset):
+        def __init__(self, X, y):
+            self.X = torch.tensor(X, dtype=torch.float32)
+            self.y = torch.tensor(y, dtype=torch.long)
+
+        def __len__(self):
+            return len(self.y)
+
+        def __getitem__(self, i):
+            return self.X[i], self.y[i]
+
+    def supcon_loss(z: "torch.Tensor", y: "torch.Tensor") -> "torch.Tensor":
+        sim = z @ z.T / temperature
+        sim = sim - sim.max(dim=1, keepdim=True).values.detach()
+        mask_pos = (y.unsqueeze(0) == y.unsqueeze(1)).float()
+        mask_self = torch.eye(len(y), device=z.device)
+        mask_pos = mask_pos - mask_self
+        exp_sim = torch.exp(sim) * (1 - mask_self)
+        log_prob = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-12)
+        pos_count = mask_pos.sum(dim=1)
+        valid = pos_count > 0
+        if not valid.any():
+            return torch.tensor(0.0, device=z.device, requires_grad=True)
+        mean_log_prob_pos = (mask_pos * log_prob).sum(dim=1)[valid] / pos_count[valid]
+        return -mean_log_prob_pos.mean()
+
+    batch_size = min(64, len(X_train))
+    train_loader = DataLoader(DS(X_train, y_train), batch_size=batch_size,
+                               shuffle=True, drop_last=False)
+
+    torch.manual_seed(RANDOM_SEED)
+    model = ProjHead().to(device)
+    opt = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+
+    for _ in range(epochs):
+        model.train()
+        for Xb, yb in train_loader:
+            Xb, yb = Xb.to(device), yb.to(device)
+            opt.zero_grad()
+            loss = supcon_loss(model(Xb), yb)
+            loss.backward()
+            opt.step()
+        sched.step()
+
+    model.eval()
+    with torch.no_grad():
+        Z_train = model(torch.tensor(X_train, device=device)).cpu().numpy()
+        Z_test = model(torch.tensor(X_test, device=device)).cpu().numpy()
+
+    centroids = np.stack([
+        normalize(Z_train[y_train == c].mean(axis=0, keepdims=True), norm="l2")[0]
+        for c in range(len(le.classes_))
+    ])
+    sims = Z_test @ centroids.T
+    preds = sims.argmax(axis=1)
+
+    y_pred = le.inverse_transform(preds)
+    y_true = le.inverse_transform(y_test)
+    return TrainResult(
+        model=(model, le, centroids),
+        accuracy=accuracy_score(y_true, y_pred),
         y_pred=y_pred,
         y_true=y_true,
         classes=le.classes_,

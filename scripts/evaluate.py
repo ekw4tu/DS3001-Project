@@ -13,11 +13,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import TRAIN_PKL, TEST_PKL, VGG_HEAD_PTH
+from src.config import TRAIN_PKL, TEST_PKL, VGG_HEAD_PTH, VGG_CONTRAST_PTH
 from src.identify import build_gallery, identify
 from src.train import (
     train_condition_classifier, train_identity_classifier,
-    train_vgg_pca_pipeline, train_vgg_mlp_head, per_condition_accuracy,
+    train_vgg_pca_pipeline, train_vgg_mlp_head, train_vgg_contrastive_head,
+    per_condition_accuracy,
 )
 from src.metadata import merge_clean
 
@@ -70,7 +71,14 @@ def main():
         torch.save(vgg_mlp.model[2], VGG_HEAD_PTH)
         print(f"  saved best head -> {VGG_HEAD_PTH}")
 
-    print("\n[7] identify() validation (ArcFace cosine)")
+        print("\n[7] VGG19 -> Identity (SupCon contrastive + nearest-centroid)")
+        vgg_con = train_vgg_contrastive_head(train_df, test_df)
+        results["VGG19 id SupCon+NN"] = vgg_con.accuracy
+        print(f"  accuracy = {vgg_con.accuracy:.3f}")
+        torch.save(vgg_con.model[0].state_dict(), VGG_CONTRAST_PTH)
+        print(f"  saved contrastive head -> {VGG_CONTRAST_PTH}")
+
+    print("\n[8] identify() validation (ArcFace cosine)")
     full = pd.concat([train_df, test_df], ignore_index=True)
     emb, lbl, seeded = build_gallery(full, verbose=False)
     test_arc = test_df[(test_df["model"] == "ArcFace") &
@@ -83,7 +91,7 @@ def main():
         results["identify() cosine"] = acc
         print(f"  accuracy = {acc:.3f} ({correct}/{len(y)})")
 
-    print("\n[8] Per-condition identity accuracy breakdown")
+    print("\n[9] Per-condition identity accuracy breakdown")
     cond_test = np.array([merge_clean(c) for c in test_df[test_df.model == "ArcFace"].condition.values])
     pivot = pd.concat([
         per_condition_accuracy(arc_id.y_true, arc_id.y_pred, cond_test, "ArcFace"),

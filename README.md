@@ -75,7 +75,8 @@ MLP head artifact is saved under `artifacts/vgg19_finetuned_head.pth`.
 | ArcFace LR | Identity | 1.000 |
 | VGG19 LR (raw) | Identity | 0.810 |
 | VGG19 L2 + PCA + LR | Identity | 0.785 |
-| VGG19 MLP head (ours) | Identity | 0.818 |
+| VGG19 MLP head (ours) | Identity | 0.905 |
+| VGG19 SupCon + nearest-centroid (ours) | Identity | see `evaluate.py` step [7] |
 | ArcFace LR | Condition | see `evaluate.py` |
 | VGG19 LR | Condition | see `evaluate.py` |
 
@@ -196,6 +197,7 @@ to Alice in future probe sets. If you name every Alice file `alice_<n>.jpg`,
 | Performance across conditions, held-out test set only | `scripts/evaluate.py` step [8] (per-condition breakdown) |
 | Fine-tune re-identification on VGG features (LR-on-top) | `src/train.py` `train_vgg_pca_pipeline` |
 | Fine-tune VGG layers (MLP head over frozen VGG) | `src/train.py` `train_vgg_mlp_head` |
+| Fine-tune VGG for clustering / distance-based id | `src/train.py` `train_vgg_contrastive_head` (SupCon projection head + nearest-centroid cosine) |
 | Documentation of full pipeline | this README + docstrings in `src/` |
 | Instructions for running on held-out test sets | `scripts/evaluate.py` is the one command |
 | In-class challenge: match 5 unknown feature vectors | `scripts/identify_unknowns.py` |
@@ -242,7 +244,17 @@ to Alice in future probe sets. If you name every Alice file `alice_<n>.jpg`,
     path from the PDF. We keep VGG weights frozen and train a 3-layer head
     with batch norm + dropout. Dataset is too small to finetune 140M params
     without overfitting.
-11. **ArcFace gallery + `identify()`** (`build_gallery`, `identify`). WHY:
+11. **VGG SupCon contrastive head** (`train_vgg_contrastive_head`). WHY: the
+    Stage 3 PDF asks us to finetune VGG so its features are strong enough
+    for *clustering/distance-based identification*. Cross-entropy on a
+    closed label set does not shape the metric space — it only separates
+    classes at the decision boundary. SupCon (Khosla et al. 2020) directly
+    pulls same-identity embeddings together on the unit sphere and pushes
+    different-identity embeddings apart, which is exactly the geometry a
+    cosine-NN / k-means lookup exploits. Architecture:
+    `VGG19 (frozen) -> L2 -> Linear(4096, 512) -> BN -> ReLU -> Linear(512, 128) -> L2`.
+    Inference is nearest-centroid on the projected unit sphere.
+12. **ArcFace gallery + `identify()`** (`build_gallery`, `identify`). WHY:
     this is the production classifier — cosine similarity over a gallery.
     The auto-seed-missing-identity trick (from Stage 3 cell 9) means any
     identity present in Probe/ but missing from Gallery/ still ends up in
