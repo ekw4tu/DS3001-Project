@@ -22,7 +22,7 @@ from src.identify import append_to_gallery
 from src.metadata import register_identity
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True, help='Canonical display name, e.g. "Alice Smith"')
     ap.add_argument("--folder", required=True, type=Path,

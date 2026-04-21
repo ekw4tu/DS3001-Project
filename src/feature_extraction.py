@@ -1,10 +1,4 @@
-"""ArcFace and VGG19 feature extraction.
-
-Lifted from Stage 2 cells 7 (ArcFace) and 10 (VGG19). Unified into functions
-that accept a list of image paths so the same code serves full-dataset
-extraction (build_gallery), incremental additions (add_identity), and
-ad-hoc single-image calls.
-"""
+"""ArcFace and VGG19 feature extraction."""
 from pathlib import Path
 from typing import Iterable
 import os
@@ -15,9 +9,23 @@ from tqdm import tqdm
 
 from .config import IMG_EXTENSIONS
 from .metadata import parse_base_identity, parse_condition
+from .types import EmbeddingRecord
 
 
-def walk_image_tasks(base_path: Path, splits=("Gallery", "Probe")) -> list[tuple]:
+def _make_record(filename: str, identity: str, base_identity: str, condition: str,
+                 split: str, model: str, embedding: np.ndarray) -> EmbeddingRecord:
+    return EmbeddingRecord(
+        filename=filename,
+        identity=identity,
+        base_identity=base_identity,
+        condition=condition,
+        split=split,
+        model=model,
+        embedding=embedding,
+    )
+
+
+def walk_image_tasks(base_path: Path, splits: tuple[str, ...] = ("Gallery", "Probe")) -> list[tuple[str, str, str]]:
     """Return (split, folder_path, filename) tuples for all images under base_path.
 
     Accepts 'Gallery' or 'Gallery ' (trailing space) to match the original
@@ -38,8 +46,7 @@ def walk_image_tasks(base_path: Path, splits=("Gallery", "Probe")) -> list[tuple
 def init_arcface(use_gpu: bool = False):
     """Load buffalo_l (detection + alignment + ArcFace embedding).
 
-    WHY buffalo_l: matches the Stage 2 choice so gallery vectors stay
-    compatible with previously saved embeddings.
+    buffalo_l is required for compatibility with previously saved gallery vectors.
     """
     from insightface.app import FaceAnalysis
 
@@ -60,7 +67,7 @@ def init_vgg19():
     return Model(inputs=base.input, outputs=base.get_layer("fc2").output)
 
 
-def extract_arcface(tasks: Iterable[tuple], app) -> list[dict]:
+def extract_arcface(tasks: Iterable[tuple[str, str, str]], app) -> list[EmbeddingRecord]:
     """Return [{filename, identity, base_identity, condition, split, embedding}, ...]."""
     records = []
     for split, root, name in tqdm(list(tasks), desc="ArcFace"):
@@ -71,19 +78,19 @@ def extract_arcface(tasks: Iterable[tuple], app) -> list[dict]:
         if not faces:
             continue
         folder = os.path.basename(root)
-        records.append({
-            "filename": name,
-            "identity": folder,
-            "base_identity": parse_base_identity(folder, name),
-            "condition": parse_condition(folder, name, split),
-            "split": split.strip(),
-            "model": "ArcFace",
-            "embedding": faces[0].embedding.astype(np.float32),
-        })
+        records.append(_make_record(
+            filename=name,
+            identity=folder,
+            base_identity=parse_base_identity(folder, name),
+            condition=parse_condition(folder, name, split),
+            split=split.strip(),
+            model="ArcFace",
+            embedding=faces[0].embedding.astype(np.float32),
+        ))
     return records
 
 
-def extract_vgg19(tasks: Iterable[tuple], app, vgg_model) -> list[dict]:
+def extract_vgg19(tasks: Iterable[tuple[str, str, str]], app, vgg_model) -> list[EmbeddingRecord]:
     """VGG19 features from face crops detected by InsightFace.
 
     WHY use InsightFace for cropping: VGG19 has no face detector of its own;
@@ -112,20 +119,20 @@ def extract_vgg19(tasks: Iterable[tuple], app, vgg_model) -> list[dict]:
         feat = vgg_model.predict(batch, verbose=0)[0].astype(np.float32)
 
         folder = os.path.basename(root)
-        records.append({
-            "filename": name,
-            "identity": folder,
-            "base_identity": parse_base_identity(folder, name),
-            "condition": parse_condition(folder, name, split),
-            "split": split.strip(),
-            "model": "VGG19",
-            "embedding": feat,
-        })
+        records.append(_make_record(
+            filename=name,
+            identity=folder,
+            base_identity=parse_base_identity(folder, name),
+            condition=parse_condition(folder, name, split),
+            split=split.strip(),
+            model="VGG19",
+            embedding=feat,
+        ))
     return records
 
 
 def extract_arcface_for_folder(folder: Path, app, label: str, condition: str = "clean",
-                                split: str = "Gallery") -> list[dict]:
+                                split: str = "Gallery") -> list[EmbeddingRecord]:
     """Extract ArcFace vectors for every image in one folder under a fixed label.
 
     Used by add_identity.py so the caller controls the canonical name rather
@@ -141,13 +148,13 @@ def extract_arcface_for_folder(folder: Path, app, label: str, condition: str = "
         faces = app.get(img)
         if not faces:
             continue
-        records.append({
-            "filename": name,
-            "identity": folder.name,
-            "base_identity": label,
-            "condition": condition,
-            "split": split,
-            "model": "ArcFace",
-            "embedding": faces[0].embedding.astype(np.float32),
-        })
+        records.append(_make_record(
+            filename=name,
+            identity=folder.name,
+            base_identity=label,
+            condition=condition,
+            split=split,
+            model="ArcFace",
+            embedding=faces[0].embedding.astype(np.float32),
+        ))
     return records

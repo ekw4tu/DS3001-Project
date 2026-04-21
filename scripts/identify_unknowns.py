@@ -1,4 +1,4 @@
-"""Score unknown ArcFace feature vectors against the gallery (in-class challenge).
+"""Score unknown ArcFace feature vectors against the gallery.
 
 Accepts a .npy (shape [N, 512]) or .pkl (list of vectors / dict with 'embeddings')
 and prints the top-k match for each one.
@@ -34,7 +34,7 @@ def _load_vectors(path: Path) -> np.ndarray:
     return np.asarray(obj)
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("vectors", nargs="?", type=Path,
                     help=".npy or .pkl of ArcFace vectors (shape [N, 512])")

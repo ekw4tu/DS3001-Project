@@ -16,18 +16,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ARCFACE_DIM
 from src.identify import build_gallery, identify, save_gallery, load_gallery
+from src.types import EmbeddingRecord
 
 
-def _fake_row(identity: str, split: str, condition: str, vec: np.ndarray, idx: int) -> dict:
-    return {
-        "filename": f"{identity}_{split}_{idx}.jpg",
-        "identity": f"{identity}Gallery" if split == "Gallery" else f"{identity}Probe",
-        "base_identity": identity,
-        "condition": condition,
-        "split": split,
-        "model": "ArcFace",
-        "embedding": vec.astype(np.float32),
-    }
+def _fake_row(identity: str, split: str, condition: str, vec: np.ndarray, idx: int) -> EmbeddingRecord:
+    return EmbeddingRecord(
+        filename=f"{identity}_{split}_{idx}.jpg",
+        identity=f"{identity}Gallery" if split == "Gallery" else f"{identity}Probe",
+        base_identity=identity,
+        condition=condition,
+        split=split,
+        model="ArcFace",
+        embedding=vec.astype(np.float32),
+    )
 
 
 def _make_df(rng: np.random.Generator) -> pd.DataFrame:
@@ -44,7 +45,7 @@ def _make_df(rng: np.random.Generator) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_build_gallery_and_identify(tmp_path):
+def test_build_gallery_and_identify(tmp_path: Path) -> None:
     rng = np.random.default_rng(0)
     df = _make_df(rng)
 
@@ -66,7 +67,7 @@ def test_build_gallery_and_identify(tmp_path):
             assert identify(vec, emb2, lbl2) == target
 
 
-def test_build_gallery_auto_seeds_missing_identity():
+def test_build_gallery_auto_seeds_missing_identity() -> None:
     rng = np.random.default_rng(1)
     df = _make_df(rng)
     df = df[~((df["base_identity"] == "Carol") & (df["split"] == "Gallery"))].reset_index(drop=True)

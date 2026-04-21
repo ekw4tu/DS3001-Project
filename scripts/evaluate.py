@@ -1,8 +1,7 @@
 """Reproduce the Stage 3 evaluation table on the held-out test set.
 
-This is the single command a TA runs to verify the system. It reads the
-artifacts produced by build_gallery.py and runs every classifier reported
-in Stage 3 cell 10 (the unified comparison table).
+Reads the artifacts produced by build_gallery.py and runs every classifier
+in the Stage 3 comparison table.
 """
 from pathlib import Path
 import argparse
@@ -23,7 +22,7 @@ from src.train import (
 from src.metadata import merge_clean
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", type=Path, default=TRAIN_PKL)
     ap.add_argument("--test", type=Path, default=TEST_PKL)

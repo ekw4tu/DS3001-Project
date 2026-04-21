@@ -1,14 +1,8 @@
 """Build the ArcFace gallery and identify unknown vectors.
 
-Lifted from Stage 3 cell 9. Two pieces:
-  - build_gallery: turns a dataframe of ArcFace rows into a gallery, auto-seeding
-    any identity that has no Gallery/ subfolder from its clean_probe images.
-  - identify:      cosine-similarity top-k lookup against the gallery.
-
-WHY auto-seed: if someone adds photos under Probe/ but forgets a Gallery/ folder
-(as happened with Dylan in Stage 2), the gallery build silently drops that
-identity. Auto-seeding from clean_probe keeps coverage for all identities that
-exist anywhere in the dataset.
+build_gallery auto-seeds any identity that has no Gallery/ subfolder from its
+clean_probe rows, so identities present only under Probe/ are not silently
+dropped from the gallery.
 """
 import pickle
 from pathlib import Path
@@ -20,7 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from .config import GALLERY_PKL
 
 
-def build_gallery(embeddings_df: pd.DataFrame, verbose: bool = True):
+def build_gallery(embeddings_df: pd.DataFrame, verbose: bool = True) -> tuple[np.ndarray, np.ndarray, set[str]]:
     """Return (embeddings, labels, seeded_filenames).
 
     seeded_filenames is returned so callers can exclude those rows from any
@@ -54,7 +48,7 @@ def build_gallery(embeddings_df: pd.DataFrame, verbose: bool = True):
     return embeddings, labels, seeded_filenames
 
 
-def identify(unknown_vector, gallery_emb, gallery_lbl, top_k: int = 3, verbose: bool = False) -> str:
+def identify(unknown_vector: np.ndarray, gallery_emb: np.ndarray, gallery_lbl: np.ndarray, top_k: int = 3, verbose: bool = False) -> str:
     """Return the predicted identity for one ArcFace vector via cosine similarity."""
     vec = np.asarray(unknown_vector).reshape(1, -1)
     sims = cosine_similarity(vec, gallery_emb)[0]
@@ -73,7 +67,7 @@ def save_gallery(embeddings: np.ndarray, labels: np.ndarray, path: Path = GALLER
         pickle.dump({"embeddings": embeddings, "labels": labels}, f)
 
 
-def load_gallery(path: Path = GALLERY_PKL):
+def load_gallery(path: Path = GALLERY_PKL) -> tuple[np.ndarray, np.ndarray]:
     with open(path, "rb") as f:
         obj = pickle.load(f)
     return obj["embeddings"], obj["labels"]

@@ -1,13 +1,6 @@
-"""Supervised models from Stage 3.
+"""Supervised classifiers for condition and identity labels.
 
-Four functions, one per classifier in the Stage 3 comparison table:
-  train_condition_classifier - logistic regression on condition labels
-  train_identity_classifier  - logistic regression on base_identity labels
-  train_vgg_pca_pipeline     - L2 normalize -> PCA(256) -> logistic regression
-  train_vgg_mlp_head         - small MLP head trained on frozen VGG features
-  train_vgg_contrastive_head - SupCon projection head + nearest-centroid id
-
-All use random_state=42 (config.RANDOM_SEED) for reproducibility.
+All estimators seed with config.RANDOM_SEED for reproducibility.
 """
 from dataclasses import dataclass
 
@@ -15,7 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import LabelEncoder, normalize
 
 from .config import RANDOM_SEED
@@ -32,14 +25,27 @@ class TrainResult:
     report: str
 
 
-def _split_Xy(df: pd.DataFrame, feature_model: str, label_col: str):
+def _split_Xy(df: pd.DataFrame, feature_model: str, label_col: str) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     sub = df[df["model"] == feature_model]
     X = np.vstack(sub["embedding"].values)
     y = sub[label_col].values
     return X, y, sub
 
 
-def train_condition_classifier(train_df, test_df, feature_model: str = "ArcFace") -> TrainResult:
+def _build_result(model_obj, y_true, y_pred, classes, accuracy: float | None = None) -> "TrainResult":
+    if accuracy is None:
+        accuracy = accuracy_score(y_true, y_pred)
+    return TrainResult(
+        model=model_obj,
+        accuracy=accuracy,
+        y_pred=y_pred,
+        y_true=y_true,
+        classes=classes,
+        report=classification_report(y_true, y_pred, zero_division=0),
+    )
+
+
+def train_condition_classifier(train_df: pd.DataFrame, test_df: pd.DataFrame, feature_model: str = "ArcFace") -> TrainResult:
     """Logistic regression for condition (clean/Expression/Occlusion/Lighting/Side).
 
     WHY class_weight='balanced': Lighting has ~2x the samples of other conditions.
@@ -55,17 +61,10 @@ def train_condition_classifier(train_df, test_df, feature_model: str = "ArcFace"
     clf = LogisticRegression(max_iter=1000, random_state=RANDOM_SEED, class_weight="balanced")
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
-    return TrainResult(
-        model=clf,
-        accuracy=accuracy_score(y_test, y_pred),
-        y_pred=y_pred,
-        y_true=y_test,
-        classes=clf.classes_,
-        report=classification_report(y_test, y_pred, zero_division=0),
-    )
+    return _build_result(clf, y_test, y_pred, clf.classes_)
 
 
-def train_identity_classifier(train_df, test_df, feature_model: str = "ArcFace") -> TrainResult:
+def train_identity_classifier(train_df: pd.DataFrame, test_df: pd.DataFrame, feature_model: str = "ArcFace") -> TrainResult:
     """One-vs-rest logistic regression on base_identity."""
     X_train, y_train, _ = _split_Xy(train_df, feature_model, "base_identity")
     X_test, y_test, _ = _split_Xy(test_df, feature_model, "base_identity")
@@ -73,17 +72,10 @@ def train_identity_classifier(train_df, test_df, feature_model: str = "ArcFace")
     clf = LogisticRegression(max_iter=1000, random_state=RANDOM_SEED)
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
-    return TrainResult(
-        model=clf,
-        accuracy=accuracy_score(y_test, y_pred),
-        y_pred=y_pred,
-        y_true=y_test,
-        classes=clf.classes_,
-        report=classification_report(y_test, y_pred, zero_division=0),
-    )
+    return _build_result(clf, y_test, y_pred, clf.classes_)
 
 
-def train_vgg_pca_pipeline(train_df, test_df) -> TrainResult:
+def train_vgg_pca_pipeline(train_df: pd.DataFrame, test_df: pd.DataFrame) -> TrainResult:
     """L2 normalize -> PCA(256) -> logistic regression.
 
     WHY L2 normalize: euclidean distance on normalized vectors approximates
@@ -104,17 +96,10 @@ def train_vgg_pca_pipeline(train_df, test_df) -> TrainResult:
     clf = LogisticRegression(max_iter=1000, random_state=RANDOM_SEED)
     clf.fit(X_train_p, y_train)
     y_pred = clf.predict(X_test_p)
-    return TrainResult(
-        model=(clf, pca),
-        accuracy=accuracy_score(y_test, y_pred),
-        y_pred=y_pred,
-        y_true=y_test,
-        classes=clf.classes_,
-        report=classification_report(y_test, y_pred, zero_division=0),
-    )
+    return _build_result((clf, pca), y_test, y_pred, clf.classes_)
 
 
-def train_vgg_mlp_head(train_df, test_df, epochs: int = 60, hidden_dim: int = 512):
+def train_vgg_mlp_head(train_df: pd.DataFrame, test_df: pd.DataFrame, epochs: int = 60, hidden_dim: int = 512) -> TrainResult:
     """Train a small MLP head on frozen 4096-d VGG features.
 
     WHY MLP over LR: lets the model learn nonlinear combinations of VGG features,
@@ -203,19 +188,13 @@ def train_vgg_mlp_head(train_df, test_df, epochs: int = 60, hidden_dim: int = 51
 
     y_pred = le.inverse_transform(best_preds)
     y_true = le.inverse_transform(y_test)
-    return TrainResult(
-        model=(model, le, best_state),
-        accuracy=best_acc,
-        y_pred=y_pred,
-        y_true=y_true,
-        classes=le.classes_,
-        report=classification_report(y_true, y_pred, zero_division=0),
-    )
+    return _build_result((model, le, best_state), y_true, y_pred, le.classes_,
+                         accuracy=best_acc)
 
 
-def train_vgg_contrastive_head(train_df, test_df, epochs: int = 80,
+def train_vgg_contrastive_head(train_df: pd.DataFrame, test_df: pd.DataFrame, epochs: int = 80,
                                 proj_dim: int = 128, hidden_dim: int = 512,
-                                temperature: float = 0.1):
+                                temperature: float = 0.1) -> TrainResult:
     """Supervised-contrastive projection head on frozen VGG19 features.
 
     Pipeline (Stage 3 "finetune VGG for clustering/distance-based id"):
@@ -330,7 +309,7 @@ def train_vgg_contrastive_head(train_df, test_df, epochs: int = 80,
     )
 
 
-def per_condition_accuracy(y_true, y_pred, conditions, model_name: str) -> pd.DataFrame:
+def per_condition_accuracy(y_true: np.ndarray, y_pred: np.ndarray, conditions: np.ndarray, model_name: str) -> pd.DataFrame:
     """Break down identity accuracy by condition (for the Stage 3 comparison table)."""
     df = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "condition": conditions})
     rows = [

@@ -40,7 +40,6 @@ IMG_EXTENSIONS = (".png", ".jpg", ".jpeg")
 K_IDENTITIES = 10
 RANDOM_SEED = 42
 ARCFACE_DIM = 512
-VGG19_DIM = 4096
 
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 GALLERY_DIR.mkdir(parents=True, exist_ok=True)

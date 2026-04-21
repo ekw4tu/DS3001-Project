@@ -9,7 +9,6 @@ Outputs under artifacts/:
 """
 from pathlib import Path
 import argparse
-import pickle
 import sys
 
 import pandas as pd
@@ -26,7 +25,7 @@ from src.feature_extraction import (
 from src.identify import build_gallery, save_gallery
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-path", type=Path, default=DATA_ROOT,
                     help="Root containing Gallery/ and Probe/ subfolders")

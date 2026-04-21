@@ -6,7 +6,7 @@ from sklearn.cluster import KMeans
 from .config import K_IDENTITIES, RANDOM_SEED
 
 
-def cluster_accuracy(y_true, y_pred) -> float:
+def cluster_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Best-match accuracy after optimal cluster-to-label assignment.
 
     WHY Hungarian: k-means assigns arbitrary integer labels, so we need
@@ -23,7 +23,7 @@ def cluster_accuracy(y_true, y_pred) -> float:
     return cm[row, col].sum() / len(y_true)
 
 
-def run_kmeans(X, y, k: int = K_IDENTITIES, seed: int = RANDOM_SEED):
+def run_kmeans(X: np.ndarray, y: np.ndarray, k: int = K_IDENTITIES, seed: int = RANDOM_SEED) -> tuple[np.ndarray, float, KMeans]:
     km = KMeans(n_clusters=k, n_init=10, random_state=seed)
     pred = km.fit_predict(X)
     return pred, cluster_accuracy(y, pred), km

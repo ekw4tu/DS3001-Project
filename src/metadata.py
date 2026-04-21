@@ -1,9 +1,7 @@
 """Data-driven identity and condition parsing.
 
-Replaces the hardcoded if/elif chains from the Stage 2/3 notebooks with a
-registry that can be extended without touching parser code. `add_identity.py`
-appends to IDENTITY_TOKENS at runtime by writing a JSON override next to
-this file.
+Tokens are matched against folder+filename substrings. `add_identity.py`
+extends the registry at runtime via a JSON override next to this file.
 """
 from pathlib import Path
 import json
@@ -38,13 +36,13 @@ def _load_overrides() -> dict:
     return {}
 
 
-def identity_tokens() -> dict:
+def identity_tokens() -> dict[str, list[str]]:
     merged = dict(DEFAULT_IDENTITY_TOKENS)
     merged.update(_load_overrides().get("identities", {}))
     return merged
 
 
-def condition_tokens() -> dict:
+def condition_tokens() -> dict[str, list[str]]:
     merged = dict(DEFAULT_CONDITION_TOKENS)
     merged.update(_load_overrides().get("conditions", {}))
     return merged
