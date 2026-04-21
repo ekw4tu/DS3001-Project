@@ -9,7 +9,7 @@ pillow>=10.0
 tqdm>=4.65
 
 insightface==0.7.3
-onnx>=1.14
+onnx>=1.14,<1.17
 onnxruntime>=1.16
 
 tensorflow>=2.13,<2.17
