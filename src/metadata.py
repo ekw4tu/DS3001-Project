@@ -56,11 +56,19 @@ def register_identity(canonical_name: str, tokens: list[str]) -> None:
 
 
 def parse_base_identity(folder_name: str, file_name: str = "") -> str:
-    """Return canonical identity from folder + filename substrings."""
+    """Return canonical identity from folder + filename substrings.
+
+    Numeric folder stems (e.g. "1Gallery", "38Probe") fall through to the
+    numeric label itself so the in-class classmate roster doesn't need 38
+    registry entries.
+    """
     s = (folder_name + file_name).lower()
     for name, tokens in identity_tokens().items():
         if any(tok in s for tok in tokens):
             return name
+    stem = folder_name.replace("Gallery", "").replace("Probe", "").strip()
+    if stem.isdigit():
+        return stem
     return "Unknown"
 
 

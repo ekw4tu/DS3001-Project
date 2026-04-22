@@ -23,7 +23,16 @@ from src.identify import load_gallery, identify
 
 def _load_vectors(path: Path) -> np.ndarray:
     if path.suffix == ".npy":
-        return np.load(path)
+        arr = np.load(path, allow_pickle=True)
+        if arr.dtype == object:
+            obj = arr.item() if arr.shape == () else arr.tolist()
+            if isinstance(obj, dict):
+                for k in ("embeddings", "features", "vectors"):
+                    if k in obj:
+                        return np.asarray(obj[k])
+                raise ValueError(f".npy dict has no recognized key; got {list(obj)}")
+            return np.asarray(obj)
+        return arr
     with open(path, "rb") as f:
         obj = pickle.load(f)
     if isinstance(obj, dict):

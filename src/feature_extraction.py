@@ -33,13 +33,16 @@ def walk_image_tasks(base_path: Path, splits: tuple[str, ...] = ("Gallery", "Pro
     """
     tasks = []
     for split in splits:
+        seen: set[tuple[str, str]] = set()
         for candidate in (base_path / split, base_path / f"{split} "):
             if candidate.exists():
                 for root, _, files in os.walk(candidate):
                     for name in files:
                         if name.lower().endswith(IMG_EXTENSIONS):
-                            tasks.append((split, root, name))
-                break
+                            key = (os.path.basename(root), name)
+                            if key not in seen:
+                                seen.add(key)
+                                tasks.append((split, root, name))
     return tasks
 
 
