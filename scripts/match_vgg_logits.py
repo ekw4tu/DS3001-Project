@@ -51,6 +51,14 @@ def main() -> None:
                     help="Score against individual gallery images (k-NN) instead of "
                          "per-identity centroids. Prediction is the majority identity "
                          "among the top-k nearest images.")
+    ap.add_argument("--center", action="store_true",
+                    help="Subtract gallery-mean logit before L2 norm. Removes the "
+                         "common 'face-ish' ImageNet component so cosine measures "
+                         "identity-specific residual.")
+    ap.add_argument("--max-sim", action="store_true",
+                    help="Per-identity score = max similarity to any of their images "
+                         "(instead of centroid). Preserves the best single shot when "
+                         "each classmate only has 1-3 photos.")
     ap.add_argument("--gpu", action="store_true")
     args = ap.parse_args()
 
@@ -86,17 +94,22 @@ def main() -> None:
         feats.append((fc2 @ W + b)[0].astype(np.float32))
         labels.append(parse_base_identity(os.path.basename(root), name))
 
-    X = normalize(np.vstack(feats), norm="l2")
+    X_raw = np.vstack(feats)
+    mean_vec = X_raw.mean(axis=0, keepdims=True) if args.center else 0.0
+    X = normalize(X_raw - mean_vec, norm="l2")
     labels = np.array(labels)
 
     if args.classmates_only:
         keep = np.array([n.isdigit() for n in labels])
         X, labels = X[keep], labels[keep]
 
+    def prep_unknown(path):
+        return normalize(_load_unknown(path) - mean_vec, norm="l2")
+
     if args.knn:
         print(f"gallery: {len(set(labels))} identities, {len(X)} vectors (k-NN mode)")
         for path in args.vectors:
-            u = normalize(_load_unknown(path), norm="l2")
+            u = prep_unknown(path)
             sims = (u @ X.T)[0]
             order = sims.argsort()[::-1][:args.top_k]
             top_labels = [labels[j] for j in order]
@@ -112,14 +125,19 @@ def main() -> None:
             identities = sorted(set(labels), key=int)
         else:
             identities = sorted(set(labels) - {"Unknown"})
-        centroids = np.stack([
-            normalize(X[labels == n].mean(axis=0, keepdims=True), norm="l2")[0]
-            for n in identities
-        ])
-        print(f"gallery: {len(identities)} identities, {len(X)} vectors")
+        mode = "max-sim" if args.max_sim else "centroid"
+        print(f"gallery: {len(identities)} identities, {len(X)} vectors ({mode})")
         for path in args.vectors:
-            u = normalize(_load_unknown(path), norm="l2")
-            sims = (u @ centroids.T)[0]
+            u = prep_unknown(path)
+            if args.max_sim:
+                per_image = (u @ X.T)[0]
+                sims = np.array([per_image[labels == n].max() for n in identities])
+            else:
+                centroids = np.stack([
+                    normalize(X[labels == n].mean(axis=0, keepdims=True), norm="l2")[0]
+                    for n in identities
+                ])
+                sims = (u @ centroids.T)[0]
             order = sims.argsort()[::-1][:args.top_k]
             print(f"\n=== {path} ===")
             for rank, j in enumerate(order, 1):
