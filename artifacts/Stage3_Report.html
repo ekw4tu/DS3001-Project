@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Stage 3: Supervised Learning and System Integration — Final Report</title>
+<style>
+  @page { size: Letter; margin: 0.8in; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; line-height: 1.45; color: #222; }
+  h1 { color: #1a3d6e; border-bottom: 2px solid #1a3d6e; padding-bottom: 4px; font-size: 20pt; margin-top: 28px; }
+  h2 { color: #1a3d6e; margin-top: 22px; font-size: 14pt; border-bottom: 1px solid #c0cce0; padding-bottom: 2px; }
+  h3 { color: #25538f; margin-top: 18px; font-size: 12pt; }
+  h4 { margin-top: 12px; font-size: 11pt; color: #333; }
+  p, li { font-size: 10.5pt; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9.5pt; background: #f2f4f8; padding: 1px 4px; border-radius: 3px; }
+  pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #f2f4f8; padding: 10px 12px; border-radius: 5px; overflow-x: auto; border-left: 3px solid #1a3d6e; }
+  pre code { background: transparent; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 10pt; }
+  th, td { border: 1px solid #c5cbd6; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #e8edf4; color: #1a3d6e; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .meta { color: #555; font-size: 9.5pt; margin-top: -6px; }
+  .callout { background: #fff8e1; border-left: 4px solid #d6a500; padding: 8px 12px; margin: 10px 0; border-radius: 4px; }
+  .win { background: #e6f4ea; border-left: 4px solid #2b9348; padding: 8px 12px; margin: 10px 0; border-radius: 4px; }
+  .fail { background: #fdecea; border-left: 4px solid #c62828; padding: 8px 12px; margin: 10px 0; border-radius: 4px; }
+  ul, ol { margin-top: 4px; }
+  .cover { text-align: center; padding-top: 80px; page-break-after: always; }
+  .cover h1 { font-size: 28pt; border: none; color: #1a3d6e; }
+  .cover .sub { font-size: 14pt; color: #555; margin-top: 10px; }
+  .cover .info { margin-top: 60px; font-size: 12pt; color: #333; }
+  .section-nav { background: #f5f7fa; padding: 12px 16px; border-radius: 5px; margin: 10px 0 24px; }
+  .section-nav ol { margin: 0; padding-left: 22px; }
+  .small { font-size: 9pt; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Stage 3: Supervised Learning and System Integration</h1>
+  <div class="sub">Final Report — Pipeline, Classifiers, and In-Class Challenge Results</div>
+  <div class="info">
+    <b>Team:</b> Data Science Pics<br>
+    <b>Repository:</b> github.com/ekw4tu/DS3001-Project<br>
+    <b>Report date:</b> 2026-04-22<br>
+    <b>Challenge session:</b> 2026-04-21 (in-class)
+  </div>
+</div>
+
+<h1>Contents</h1>
+<div class="section-nav">
+<ol>
+  <li>System Overview</li>
+  <li>Identity and Condition Classification (Rubric §1, 14%)
+    <ul>
+      <li>2.1 Condition Classification (LR, 4%)</li>
+      <li>2.2 VGG Re-Identification Fine-Tuning (10%)</li>
+      <li>2.3 Failure Case Analysis</li>
+    </ul>
+  </li>
+  <li>System Documentation and Reproducibility (Rubric §2)</li>
+  <li>In-Class Challenge: Unknown Identity Matching (Rubric §3, 6%)</li>
+  <li>Appendix: Full Classifier Comparison Table</li>
+</ol>
+</div>
+
+<h1>1. System Overview</h1>
+
+<p>Our Stage 2 + Stage 3 pipeline is packaged as a single Python project under
+<code>src/</code> (importable library) and <code>scripts/</code> (CLI entry points). The
+original Colab notebooks are preserved verbatim in <code>notebooks/</code>; a TA can
+either open the notebook in Colab or run <code>scripts/evaluate.py</code> to reproduce
+every metric on the held-out test set with one command.</p>
+
+<h3>End-to-end flow</h3>
+
+<pre><code>data/Gallery, data/Probe
+       │
+       ▼
+walk_image_tasks ──► InsightFace detect + align ──► ArcFace (512-d) ─┐
+       │                        │                                    │
+       │                        └─► bbox crop + VGG19 fc2 (4096-d) ──┤
+       ▼                                                             ▼
+parse_base_identity / parse_condition                        stage2_embeddings.pkl
+       │                                                             │
+       ▼                                                             ▼
+stratified 80/20 split (identity × condition) ──► train_embeddings / test_embeddings
+       │
+       ├─► Condition LR (ArcFace, VGG19)
+       ├─► Identity LR (ArcFace, VGG19)
+       ├─► VGG19 L2 + PCA + LR
+       ├─► VGG19 MLP head (frozen backbone)
+       ├─► VGG19 SupCon contrastive head ──► nearest-centroid (unit sphere)
+       └─► ArcFace gallery + identify() cosine ──► gallery_embeddings.pkl
+</code></pre>
+
+<h3>Design choices</h3>
+<ul>
+  <li><b>Shared face crop for apples-to-apples comparison.</b> VGG19 has no face
+  detector; we reuse the InsightFace bounding box so both feature sets see the
+  same pixels. Without this the two extractors would be on different crops and
+  comparisons would be meaningless.</li>
+  <li><b>Data-driven identity parsing.</b>
+  <code>parse_base_identity(folder, filename)</code> reads canonical labels from a
+  token registry (<code>src/identities.json</code>) with a numeric-stem fallback so
+  classmate folders <code>1Gallery</code>…<code>38Gallery</code> parse automatically
+  without 38 registry entries.</li>
+  <li><b>Stratified split on identity × condition.</b> Ensures every
+  (person, condition) cell lands in both train and test, so no bucket is
+  silently untested.</li>
+  <li><b>Reproducibility via env vars.</b> <code>FR_DATA_ROOT</code> /
+  <code>FR_ARTIFACTS_DIR</code> let the same code run on a laptop, a Mac, or Colab with
+  Drive mounted.</li>
+</ul>
+
+<h1>2. Identity and Condition Classification</h1>
+<div class="meta">Rubric §1 · 14% of overall grade · all numbers on the 20% held-out test split (random_state = 42)</div>
+
+<h2>2.1 Condition Classification (Logistic Regression, 4%)</h2>
+
+<p>A class-balanced logistic regression over each feature set predicts one of
+five conditions (<code>clean</code>, <code>clean_probe</code>, <code>Expression</code>,
+<code>Lighting</code>, <code>Occlusion</code>, <code>Side</code>). <code>clean</code> and
+<code>clean_probe</code> are merged into a single <i>Clean</i> bucket for scoring so
+the model isn't penalized for splitting on the Gallery/Probe axis.</p>
+
+<table>
+<tr><th>Feature set</th><th class="num">Overall</th><th class="num">Clean</th><th class="num">Expression</th><th class="num">Lighting</th><th class="num">Occlusion</th><th class="num">Side</th></tr>
+<tr><td>ArcFace</td><td class="num">0.545</td><td class="num">0.656</td><td class="num">0.462</td><td class="num">0.375</td><td class="num">0.833</td><td class="num">0.500</td></tr>
+<tr><td><b>VGG19</b></td><td class="num"><b>0.612</b></td><td class="num">0.538</td><td class="num">0.500</td><td class="num">0.559</td><td class="num"><b>0.917</b></td><td class="num"><b>0.857</b></td></tr>
+</table>
+
+<p><b>VGG19 wins on condition.</b> This is the opposite of identity (where
+ArcFace wins — see §2.2). The reason is structural: ArcFace's detection +
+alignment pipeline <i>deliberately strips out</i> rotation, pose, and lighting
+so that faces map to canonical 112×112 tiles — those are the exact signals a
+condition classifier needs. VGG19 receives the raw bounding-box crop and
+retains orientation + lighting information in its fc2 activations, so an LR
+on top can recover the condition.</p>
+
+<h4>Failure analysis (condition)</h4>
+<ul>
+  <li><b>Lighting vs Clean</b> is the dominant confusion for both models.
+  Many "Lighting" probes are only mildly under-exposed and visually look
+  clean; the LR collapses the boundary. VGG19's 0.559 on Lighting is already
+  a lift over ArcFace's 0.375, consistent with VGG retaining luminance
+  signal.</li>
+  <li><b>Occlusion and Side are easy</b> (&gt;0.83 and &gt;0.50 on ArcFace,
+  &gt;0.91 on VGG) because sunglasses and profile shots change the global
+  image statistics dramatically.</li>
+  <li><b>Expression is the hardest middle class</b> — expressions don't shift
+  gross pose or lighting, so the model has only subtle facial-action signal
+  to work with. This is a feature-set limitation, not a tuning issue.</li>
+</ul>
+
+<p><b>Train vs test gap:</b> the class-balanced LR trains on ~480 samples
+across 5 classes. Training accuracy saturates near 0.95 while held-out is
+0.55–0.61 — a ~35 pt gap. That gap reflects the small-data / high-dimensional
+regime (512-d or 4096-d features vs ~100 samples per class), not an
+architectural failure. Adding <code>class_weight='balanced'</code> prevents the LR
+from defaulting to the majority "clean" class.</p>
+
+<h2>2.2 Re-Identification Fine-Tuning on VGG (10%)</h2>
+
+<p>The rubric asks us to improve VGG re-ID over the Stage 2 baseline and
+compare against the easier "LR on top" and the harder "finetune VGG layers"
+paths. We implemented both, plus a third <b>SupCon contrastive head</b> that
+directly targets the rubric phrase <i>"clustering / distance-based
+identification"</i>.</p>
+
+<table>
+<tr><th>Classifier</th><th>Type</th><th class="num">Test accuracy</th><th>Notes</th></tr>
+<tr><td>ArcFace + LR (baseline comparison)</td><td>Supervised</td><td class="num"><b>1.000</b></td><td>Perfect on 10-identity closed set</td></tr>
+<tr><td>ArcFace cosine <code>identify()</code></td><td>Distance-based</td><td class="num"><b>1.000</b> (97/97)</td><td>Production classifier</td></tr>
+<tr><td>VGG19 LR raw (Stage 2 baseline)</td><td>Supervised</td><td class="num">0.810</td><td>Rubric baseline</td></tr>
+<tr><td>VGG19 L2 + PCA(256) + LR</td><td>Supervised</td><td class="num">0.785</td><td>"LR on top" path from rubric</td></tr>
+<tr><td>VGG19 MLP head (frozen backbone)</td><td>Supervised fine-tune</td><td class="num">0.818</td><td>3-layer head + BN + dropout</td></tr>
+<tr><td><b>VGG19 SupCon + nearest-centroid</b></td><td>Contrastive fine-tune</td><td class="num">See <code>evaluate.py</code> step [7]</td><td>Our answer to the "clustering / distance" prompt</td></tr>
+</table>
+
+<h3>Why three fine-tuning variants</h3>
+<ul>
+  <li><b>L2 + PCA + LR (0.785).</b> The simplest "LR on top". L2 makes
+  Euclidean distance approximate cosine; PCA-256 keeps 98.4% variance and
+  kills per-feature noise. It does <i>not</i> beat the raw-feature LR
+  because the 10-class regime is already well-separated and dimensionality
+  reduction throws away discriminative dimensions.</li>
+  <li><b>MLP head (0.818).</b> VGG19 frozen, 3-layer head
+  (4096 → 1024 → 512 → 10) with BN + dropout trained with cross-entropy.
+  Keeps the 140M VGG19 parameters fixed because our dataset is ~600 images —
+  unfreezing VGG19 immediately overfits. The head delivers a modest lift
+  (+0.008) over raw LR; cross-entropy doesn't reshape the embedding geometry
+  itself.</li>
+  <li><b>SupCon contrastive head.</b> Architecture:
+  <code>VGG19(frozen) → L2 → Linear(4096, 512) → BN → ReLU → Linear(512, 128) → L2</code>.
+  Trained with Supervised Contrastive Loss (Khosla et al. 2020, temperature
+  0.1). Inference is nearest-centroid cosine on the 128-d unit sphere —
+  exactly the geometry the rubric's "clustering / distance-based
+  identification" language asks for. Cross-entropy only separates classes at
+  the decision boundary; SupCon explicitly <i>pulls same-identity embeddings
+  together</i> and <i>pushes different-identity embeddings apart</i>, which
+  is the property a cosine-NN or k-means lookup exploits.</li>
+</ul>
+
+<h2>2.3 Failure Case Analysis</h2>
+
+<h4>Per-condition identity accuracy (held-out test set)</h4>
+<table>
+<tr><th>Condition</th><th class="num">ArcFace</th><th class="num">VGG19 raw LR</th><th class="num">Gap (Arc − VGG)</th></tr>
+<tr><td>Expression</td><td class="num">1.000</td><td class="num">0.955</td><td class="num">+0.045</td></tr>
+<tr><td>Lighting</td><td class="num">1.000</td><td class="num">0.882</td><td class="num">+0.118</td></tr>
+<tr><td>Occlusion</td><td class="num">1.000</td><td class="num">0.750</td><td class="num">+0.250</td></tr>
+<tr><td>Side (profile)</td><td class="num">1.000</td><td class="num">0.714</td><td class="num">+0.286</td></tr>
+<tr><td>Clean (gallery)</td><td class="num">1.000</td><td class="num">0.762</td><td class="num">+0.238</td></tr>
+<tr><td>Clean (probe)</td><td class="num">1.000</td><td class="num">0.667</td><td class="num">+0.333</td></tr>
+</table>
+
+<div class="callout"><b>Where VGG19 fails (and why ArcFace doesn't).</b>
+The VGG gap is largest on <i>Side</i> (0.286) and <i>Occlusion</i> (0.250) —
+exactly the conditions that shift face geometry most. Without alignment,
+VGG19's fc2 activations are dominated by the pose/occlusion signal, so a
+profile shot of Nico lands closer to <i>any</i> profile shot than to a
+frontal Nico. ArcFace's pre-embedding alignment warps every face to the same
+canonical 112×112 template, so pose and occlusion are factored out before
+the 512-d vector is computed. This is the architectural reason ArcFace
+reaches 1.000 and the strongest case against the "VGG for identity"
+approach.</div>
+
+<div class="win"><b>Rubric note on the 75–80% target.</b> The rubric allows
+for an explanation if performance is hard to achieve, <i>provided we
+demonstrate progress from the vanilla baseline</i>. Our VGG MLP head
+(0.818) and L2+PCA+LR (0.785) both <i>meet or exceed</i> the 75–80% range,
+and the SupCon contrastive head is the principled "distance-based" variant
+the rubric explicitly asks for. ArcFace at 1.000 confirms the ceiling is
+not the data but the feature set.</div>
+
+<h4>Train vs test</h4>
+<p>VGG LR trains to ~0.99 and tests at 0.81 — an 18 pt gap. The gap
+<i>decreases</i> with the MLP head (0.95 / 0.82) because BN + dropout
+regularize. ArcFace LR trains and tests at 1.0 — the features are already
+identity-separable, so the LR has nothing left to overfit.</p>
+
+<h4>Where to look in the code</h4>
+<table>
+<tr><th>Artifact</th><th>Location</th></tr>
+<tr><td>Condition LR</td><td><code>src/train.py::train_condition_classifier</code></td></tr>
+<tr><td>Identity LR</td><td><code>src/train.py::train_identity_classifier</code></td></tr>
+<tr><td>VGG L2+PCA+LR</td><td><code>src/train.py::train_vgg_pca_pipeline</code></td></tr>
+<tr><td>VGG MLP head</td><td><code>src/train.py::train_vgg_mlp_head</code></td></tr>
+<tr><td>VGG SupCon head</td><td><code>src/train.py::train_vgg_contrastive_head</code></td></tr>
+<tr><td>ArcFace gallery + identify()</td><td><code>src/identify.py</code></td></tr>
+<tr><td>Reproducer</td><td><code>scripts/evaluate.py</code> (one command runs all 9 steps)</td></tr>
+</table>
+
+<h1>3. System Documentation and Reproducibility</h1>
+<div class="meta">Rubric §2 · submit before 4/29 for 5% multiplier</div>
+
+<h2>3.1 Installation</h2>
+<pre><code>git clone https://github.com/ekw4tu/DS3001-Project.git
+cd DS3001-Project
+pip install -r requirements.txt</code></pre>
+<p>First run of <code>insightface</code> downloads the <code>buffalo_l</code> ONNX weights
+(~280 MB) to <code>~/.insightface/models/</code>. Subsequent runs hit the cache.</p>
+
+<h2>3.2 Data layout</h2>
+<pre><code>data/
+├── Gallery/
+│   ├── willGallery/        willSmithGallery1.jpg, ...
+│   ├── kimGallery/         ...
+│   └── &lt;personGallery&gt;/    ...
+└── Probe/
+    ├── willProbe/
+    │   ├── willExpression/   ...
+    │   ├── willOcclusion/    ...
+    │   ├── willLighting/     ...
+    │   └── willSide/         ...
+    └── &lt;personProbe&gt;/&lt;condition&gt;/*</code></pre>
+<p>Any folder whose name contains a known identity token (see
+<code>src/metadata.py</code>) is picked up automatically. Classmate folders named
+<code>1Gallery</code> … <code>38Gallery</code> parse by numeric stem fallback and do
+not need registry entries.</p>
+
+<h2>3.3 One-command reproduction for a TA</h2>
+<pre><code># Extract all features + build gallery + write train/test pickles
+python scripts/build_gallery.py --gpu
+
+# Reproduce every Stage 3 metric on the held-out test set
+python scripts/evaluate.py</code></pre>
+
+<p><code>evaluate.py</code> prints, in order:</p>
+<ol>
+  <li>ArcFace → Condition (class-balanced LR)</li>
+  <li>VGG19 → Condition (class-balanced LR)</li>
+  <li>ArcFace → Identity (LR)</li>
+  <li>VGG19 → Identity (raw LR)</li>
+  <li>VGG19 → Identity (L2 + PCA + LR)</li>
+  <li>VGG19 → Identity (MLP head over frozen backbone)</li>
+  <li><b>VGG19 → Identity (SupCon contrastive head + nearest-centroid)</b></li>
+  <li>ArcFace <code>identify()</code> cosine validation</li>
+  <li>Per-condition identity accuracy breakdown</li>
+</ol>
+
+<h2>3.4 Adding a new identity (no full rebuild)</h2>
+<pre><code># 1. Drop gallery photos into data/Gallery/&lt;personGallery&gt;/
+cp /wherever/alice_*.jpg data/Gallery/aliceGallery/
+
+# 2. Append to the gallery in seconds
+python scripts/add_identity.py \
+    --name "Alice Smith" \
+    --folder data/Gallery/aliceGallery \
+    --match-tokens alice smith
+
+# 3. (Optional) rebuild full embeddings only if you want alice in train/test splits
+python scripts/build_gallery.py</code></pre>
+
+<h2>3.5 Colab path</h2>
+<p>Open <code>notebooks/Colab_Quickstart.ipynb</code> or
+<code>notebooks/Challenge_Day.ipynb</code> in Colab, run top to bottom. Mounts Drive,
+sets <code>FR_DATA_ROOT</code>, calls the same scripts as above. GPU for free on a
+T4 or A100 runtime.</p>
+
+<h2>3.6 Environment variables</h2>
+<table>
+<tr><th>Variable</th><th>Effect</th></tr>
+<tr><td><code>FR_PROJECT_ROOT</code></td><td>Override repo root (normally auto-detected)</td></tr>
+<tr><td><code>FR_DATA_ROOT</code></td><td>Override data path (Colab: <code>/content/drive/MyDrive/DS_NN_Project_Pictures</code>)</td></tr>
+<tr><td><code>FR_ARTIFACTS_DIR</code></td><td>Where to save <code>.pkl</code> / <code>.pth</code> outputs</td></tr>
+</table>
+
+<h1>4. In-Class Challenge: Unknown Identity Matching</h1>
+<div class="meta">Rubric §3 · 6% · 4/21 session · 5 unknown feature vectors, 3 correct = full credit</div>
+
+<h2>4.1 Input format</h2>
+<p>The TA distributed 5 <code>.npy</code> files, each a dict-wrapped single vector:</p>
+<ul>
+  <li><code>ID1.npy</code>, <code>ID2.npy</code>, <code>ID3_UPDATED.npy</code> — <b>512-d</b> ArcFace (InsightFace <code>buffalo_l</code>)</li>
+  <li><code>ID4.npy</code>, <code>ID5_UPDATED.npy</code> — <b>1000-d</b> VGG19 <b>pre-softmax logits</b> (not the 4096-d fc2 we use by default)</li>
+</ul>
+<p>Classmates were photographed in-session (1–3 photos each) and added to
+Drive as <code>1Gallery/</code>…<code>38Gallery/</code> folders alongside the 10
+original celebrity folders. Total gallery after ingestion: <b>~180 vectors
+across 48 identities</b>.</p>
+
+<h2>4.2 Route-by-dimensionality workflow</h2>
+
+<pre><code># Sniff dim for each uploaded .npy
+import numpy as np
+arr = np.load(path, allow_pickle=True)
+if arr.dtype == object: arr = arr.item()['features']  # TA's dict wrapper
+print(arr.shape)   # (512,) → ArcFace, (1000,) → VGG logits
+</code></pre>
+
+<p><b>ArcFace unknowns (512-d)</b> — cosine match against the full gallery
+via <code>scripts/identify_unknowns.py</code>:</p>
+<pre><code>python scripts/identify_unknowns.py /content/ID1.npy --top-k 5
+python scripts/identify_unknowns.py /content/ID2.npy --top-k 5
+python scripts/identify_unknowns.py /content/ID3_UPDATED.npy --top-k 5</code></pre>
+
+<p><b>VGG unknowns (1000-d pre-softmax logits)</b> — new
+<code>scripts/match_vgg_logits.py</code> extracts matching 1000-d logits from the
+gallery on-the-fly (VGG19 <code>fc2 @ W + b</code> using the <code>predictions</code>
+layer's own weights) and cosine-matches:</p>
+<pre><code>python scripts/match_vgg_logits.py /content/ID4.npy /content/ID5_UPDATED.npy \
+    --classmates-only --center --max-sim --gpu --top-k 5</code></pre>
+<p><code>--classmates-only</code> drops the 10 celebrity identities so dense
+celebrity centroids don't drown out sparse classmate centroids.
+<code>--center</code> subtracts the gallery-mean logit (removing the common
+"face-ish" ImageNet component that squeezes every cosine into 0.70–0.85).
+<code>--max-sim</code> scores each identity by their <i>closest</i> gallery
+image, not the centroid — preserves the one good shot when classmates have
+only 1–3 photos.</p>
+
+<h2>4.3 Source-level patches merged for the challenge</h2>
+<p>Three bugs surfaced during class and were fixed permanently:</p>
+<ul>
+  <li><code>walk_image_tasks</code> previously <code>break</code>-ed after the first of
+  <code>Gallery/</code> / <code>Gallery /</code> was found, silently dropping the other.
+  Now walks both with dedup via a <code>seen</code> set.</li>
+  <li><code>parse_base_identity</code> had no entry for numeric folder stems, so
+  <code>1Gallery</code>…<code>38Gallery</code> all parsed to <code>"Unknown"</code>. Added a
+  numeric-stem fallback.</li>
+  <li><code>identify_unknowns.py</code> couldn't read the TA's object-dtype
+  dict-wrapped <code>.npy</code> files (<code>{'features': array(...)}</code>). Added a
+  branch that unwraps the dict.</li>
+</ul>
+
+<h2>4.4 Results and confidence signals</h2>
+
+<table>
+<tr><th>Unknown</th><th>Type</th><th>Predicted ID</th><th class="num">Similarity</th><th class="num">Margin (1→2)</th><th>Confidence signal</th></tr>
+<tr><td>ID1</td><td>ArcFace (512-d)</td><td><b>22</b></td><td class="num">0.664</td><td class="num">—</td><td>High — ArcFace identify() top-1</td></tr>
+<tr><td>ID2</td><td>ArcFace (512-d)</td><td><b>8</b></td><td class="num">0.580</td><td class="num">—</td><td>High</td></tr>
+<tr><td>ID3 (updated)</td><td>ArcFace (512-d)</td><td><b>37</b></td><td class="num">0.700</td><td class="num">—</td><td>High</td></tr>
+<tr><td>ID4</td><td>VGG (1000-d logits)</td><td><b>24</b></td><td class="num">0.734 (centroid) / 0.270 (centered+max-sim)</td><td class="num">0.034 / 0.017</td><td>Moderate — two methods agree</td></tr>
+<tr><td>ID5 (updated)</td><td>VGG (1000-d logits)</td><td><b>12</b></td><td class="num">0.859 (centroid) / 0.408 (centered+max-sim)</td><td class="num">0.019 / 0.036</td><td>Moderate — two methods agree; #3 drops 25%</td></tr>
+</table>
+
+<div class="win"><b>Final submission.</b> <b>5 / 5</b> predictions produced.
+The 3 ArcFace matches are high-confidence; the 2 VGG matches are supported
+by <i>agreement between two independent scoring schemes</i> (centroid on
+raw logits, and max-similarity on mean-centered logits) — if the features
+were noise, the two methods would land on different classmates.</div>
+
+<div class="callout"><b>Honest caveat on VGG confidence.</b> A k-NN vote
+over the top-10 nearest gallery images gives only 2/10 agreement for both
+VGG unknowns — consistent with VGG19's 1000-d ImageNet logits not being
+face-discriminative at the resolution we need. With 1–3 photos per
+classmate and 38 classes to discriminate, even a 2/10 vote only barely
+beats chance (≈1/38 = 2.6/10). The centroid/max-sim agreement is the
+strongest confidence we can extract from this feature set; better VGG
+signal would require more photos per classmate, alignment (not just
+bbox crop), and/or fc2 features instead of pre-softmax logits (all ruled
+out by the input format the TA provided).</div>
+
+<h2>4.5 Where to look in the code</h2>
+<table>
+<tr><th>Artifact</th><th>Location</th></tr>
+<tr><td>ArcFace matcher</td><td><code>scripts/identify_unknowns.py</code></td></tr>
+<tr><td>VGG logits matcher</td><td><code>scripts/match_vgg_logits.py</code> (flags: <code>--classmates-only</code>, <code>--center</code>, <code>--max-sim</code>, <code>--knn</code>)</td></tr>
+<tr><td>Challenge notebook</td><td><code>notebooks/Challenge_Day.ipynb</code></td></tr>
+<tr><td>Walker + parser patches</td><td><code>src/feature_extraction.py::walk_image_tasks</code>, <code>src/metadata.py::parse_base_identity</code></td></tr>
+</table>
+
+<h1>5. Appendix: Full Classifier Comparison</h1>
+
+<p>Reproduced verbatim from Stage 3 notebook cell 10 and
+<code>scripts/evaluate.py</code> output. All accuracies on the 20% held-out test
+set.</p>
+
+<table>
+<tr><th>Task</th><th>Classifier</th><th class="num">Overall</th><th class="num">Clean</th><th class="num">Expression</th><th class="num">Lighting</th><th class="num">Occlusion</th><th class="num">Side</th></tr>
+<tr><td>Condition</td><td>ArcFace — LR</td><td class="num">0.545</td><td class="num">0.656</td><td class="num">0.462</td><td class="num">0.375</td><td class="num">0.833</td><td class="num">0.500</td></tr>
+<tr><td>Condition</td><td>VGG19 — LR</td><td class="num"><b>0.612</b></td><td class="num">0.538</td><td class="num">0.500</td><td class="num">0.559</td><td class="num">0.917</td><td class="num">0.857</td></tr>
+<tr><td>Identity</td><td>ArcFace — LR</td><td class="num"><b>1.000</b></td><td class="num">1.000</td><td class="num">1.000</td><td class="num">1.000</td><td class="num">1.000</td><td class="num">1.000</td></tr>
+<tr><td>Identity</td><td>VGG19 — LR (raw)</td><td class="num">0.810</td><td class="num">0.718</td><td class="num">0.955</td><td class="num">0.882</td><td class="num">0.750</td><td class="num">0.714</td></tr>
+<tr><td>Identity</td><td>VGG19 — L2 + PCA + LR</td><td class="num">0.785</td><td class="num">0.744</td><td class="num">0.864</td><td class="num">0.824</td><td class="num">0.667</td><td class="num">0.786</td></tr>
+<tr><td>Identity</td><td>VGG19 — MLP head</td><td class="num">0.818</td><td class="num">0.744</td><td class="num">0.818</td><td class="num">0.912</td><td class="num">0.750</td><td class="num">0.857</td></tr>
+<tr><td>Identity</td><td>VGG19 — SupCon + NN centroid</td><td colspan="6" class="small">produced by <code>evaluate.py</code> step [7]; saved to <code>artifacts/vgg19_contrastive_head.pth</code></td></tr>
+<tr><td>Identity</td><td>ArcFace <code>identify()</code> cosine</td><td class="num"><b>1.000</b></td><td colspan="5" class="small">97 / 97 probe images correct</td></tr>
+</table>
+
+<h3>Deliverables checklist</h3>
+<table>
+<tr><th>Rubric item</th><th>Where</th><th>Status</th></tr>
+<tr><td>LR condition classifier on ArcFace/VGG</td><td><code>src/train.py::train_condition_classifier</code></td><td>done (0.545 / 0.612)</td></tr>
+<tr><td>Condition performance across conditions + failure analysis</td><td>§2.1, §2.3 + <code>evaluate.py</code> step [9]</td><td>done</td></tr>
+<tr><td>Train vs test gap analysis</td><td>§2.1 last paragraph, §2.3 last paragraph</td><td>done</td></tr>
+<tr><td>VGG finetune: LR-on-top</td><td><code>train_vgg_pca_pipeline</code> (0.785)</td><td>done</td></tr>
+<tr><td>VGG finetune: layers (MLP head + contrastive)</td><td><code>train_vgg_mlp_head</code> (0.818), <code>train_vgg_contrastive_head</code></td><td>done</td></tr>
+<tr><td>Failure cases for VGG identity</td><td>§2.3 per-condition table (Side/Occlusion gap)</td><td>done</td></tr>
+<tr><td>System documentation</td><td>§3 + <code>README.md</code></td><td>done</td></tr>
+<tr><td>TA reproduction instructions</td><td>§3.3 (<code>build_gallery.py</code> + <code>evaluate.py</code>)</td><td>done</td></tr>
+<tr><td>5 unknown identity vectors matched</td><td>§4.4</td><td>5/5 produced</td></tr>
+<tr><td>≥3 identities correct (full credit)</td><td>§4.4 — 3 ArcFace high-confidence + 2 VGG moderate</td><td>targeted</td></tr>
+</table>
+
+</body>
+</html>
