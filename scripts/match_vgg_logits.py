@@ -47,6 +47,10 @@ def main() -> None:
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--classmates-only", action="store_true",
                     help="Drop the 10 celebrity identities from the centroid set")
+    ap.add_argument("--knn", action="store_true",
+                    help="Score against individual gallery images (k-NN) instead of "
+                         "per-identity centroids. Prediction is the majority identity "
+                         "among the top-k nearest images.")
     ap.add_argument("--gpu", action="store_true")
     args = ap.parse_args()
 
@@ -86,23 +90,41 @@ def main() -> None:
     labels = np.array(labels)
 
     if args.classmates_only:
-        identities = sorted([n for n in set(labels) if n.isdigit()], key=int)
-    else:
-        identities = sorted(set(labels) - {"Unknown"})
-    centroids = np.stack([
-        normalize(X[labels == n].mean(axis=0, keepdims=True), norm="l2")[0]
-        for n in identities
-    ])
-    print(f"gallery: {len(identities)} identities, {len(X)} vectors")
+        keep = np.array([n.isdigit() for n in labels])
+        X, labels = X[keep], labels[keep]
 
-    for path in args.vectors:
-        u = normalize(_load_unknown(path), norm="l2")
-        sims = (u @ centroids.T)[0]
-        order = sims.argsort()[::-1][:args.top_k]
-        print(f"\n=== {path} ===")
-        for rank, j in enumerate(order, 1):
-            tag = " <- predicted" if rank == 1 else ""
-            print(f"  {rank}. {identities[j]:<20} similarity={sims[j]:.4f}{tag}")
+    if args.knn:
+        print(f"gallery: {len(set(labels))} identities, {len(X)} vectors (k-NN mode)")
+        for path in args.vectors:
+            u = normalize(_load_unknown(path), norm="l2")
+            sims = (u @ X.T)[0]
+            order = sims.argsort()[::-1][:args.top_k]
+            top_labels = [labels[j] for j in order]
+            vote = max(set(top_labels), key=lambda n: (top_labels.count(n),
+                                                       -top_labels.index(n)))
+            agree = top_labels.count(vote)
+            print(f"\n=== {path} ===  vote: {vote}  ({agree}/{args.top_k} agree)")
+            for rank, j in enumerate(order, 1):
+                tag = " <- vote" if labels[j] == vote and rank == top_labels.index(vote) + 1 else ""
+                print(f"  {rank}. {labels[j]:<20} similarity={sims[j]:.4f}{tag}")
+    else:
+        if args.classmates_only:
+            identities = sorted(set(labels), key=int)
+        else:
+            identities = sorted(set(labels) - {"Unknown"})
+        centroids = np.stack([
+            normalize(X[labels == n].mean(axis=0, keepdims=True), norm="l2")[0]
+            for n in identities
+        ])
+        print(f"gallery: {len(identities)} identities, {len(X)} vectors")
+        for path in args.vectors:
+            u = normalize(_load_unknown(path), norm="l2")
+            sims = (u @ centroids.T)[0]
+            order = sims.argsort()[::-1][:args.top_k]
+            print(f"\n=== {path} ===")
+            for rank, j in enumerate(order, 1):
+                tag = " <- predicted" if rank == 1 else ""
+                print(f"  {rank}. {identities[j]:<20} similarity={sims[j]:.4f}{tag}")
 
 
 if __name__ == "__main__":
