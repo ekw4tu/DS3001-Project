@@ -184,7 +184,8 @@ identification"</i>.</p>
   because the 10-class regime is already well-separated and dimensionality
   reduction throws away discriminative dimensions.</li>
   <li><b>MLP head (0.818).</b> VGG19 frozen, 3-layer head
-  (4096 → 1024 → 512 → 10) with BN + dropout trained with cross-entropy.
+  (4096 → 512 → 256 → 10) with BN + dropout (0.4, 0.3) trained with
+  cross-entropy.
   Keeps the 140M VGG19 parameters fixed because our dataset is ~600 images —
   unfreezing VGG19 immediately overfits. The head delivers a modest lift
   (+0.008) over raw LR; cross-entropy doesn't reshape the embedding geometry
